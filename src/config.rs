@@ -18,6 +18,8 @@ pub struct Config {
     pub cpus: u16,
     pub memory_mi_b: u64,
     pub disk_gi_b: u64,
+    #[serde(default)]
+    pub disk_discard: bool,
     pub numa_nodes: u16,
     pub ssh_port: u16,
     pub ports: Vec<Port>,

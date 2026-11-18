@@ -375,7 +375,12 @@ async fn launch(project: &Project, guest: &Guest) -> Result<()> {
         .arg(firmware)
         .arg("-drive")
         .arg(format!(
-            "if=virtio,format=qcow2,file={}",
+            "if=virtio,format=qcow2{},file={}",
+            if guest.config.disk_discard {
+                ",discard=unmap"
+            } else {
+                ""
+            },
             qemu_value(&project.disk())?
         ))
         .arg("-netdev")
