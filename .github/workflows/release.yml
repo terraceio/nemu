@@ -1,0 +1,88 @@
+name: Release Nemu
+
+on:
+  push:
+    tags:
+      - 'nemu-v[0-9]*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nemu-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Apple Silicon macOS
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      RUST_TOOLCHAIN: '1.93.0'
+      RUST_TARGET: aarch64-apple-darwin
+      CARGO_TERM_COLOR: always
+      LC_ALL: C
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          test "$(uname -m)" = arm64
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$RUST_TARGET"
+
+      - name: Check installer syntax
+        run: sh -n install.sh
+
+      - name: Build Nemu
+        run: cargo +"$RUST_TOOLCHAIN" build --locked --release --package nemu --target "$RUST_TARGET"
+
+      - name: Verify and package the executable
+        run: |
+          binary="target/$RUST_TARGET/release/nemu"
+          version="${GITHUB_REF_NAME#nemu-v}"
+          [[ "$version" =~ ^[0-9][0-9A-Za-z.+-]*$ ]]
+          test "$("$binary" --version)" = "nemu $version"
+          "$binary" --help
+          test "$(lipo -archs "$binary")" = arm64
+          mkdir -p dist
+          # The main-branch installer discovers the latest stable Nemu release;
+          # this release's attached installer always selects this exact version.
+          sed "s/^nemu_installer_version=''$/nemu_installer_version='$version'/" \
+            install.sh > dist/install.sh
+          grep -Fqx "nemu_installer_version='$version'" dist/install.sh
+          sh -n dist/install.sh
+          archive="nemu-$RUST_TARGET.tar.gz"
+          tar -czf "dist/$archive" -C "target/$RUST_TARGET/release" nemu
+          cd dist
+          shasum -a 256 "$archive" > "$archive.sha256"
+          shasum -a 256 -c "$archive.sha256"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#nemu-v}"
+          options=()
+          if [[ "$version" == *-* ]]; then
+            options+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            dist/install.sh \
+            "dist/nemu-$RUST_TARGET.tar.gz" \
+            "dist/nemu-$RUST_TARGET.tar.gz.sha256" \
+            --draft \
+            --latest=false \
+            --verify-tag \
+            --title "Nemu $version" \
+            --notes "Nemu for Apple Silicon Macs. Nix is required separately. Install the latest stable Nemu with: curl -fsSL https://raw.githubusercontent.com/terraceio/nemu/main/install.sh | sh. The attached install.sh is pinned to this release and verifies the archive's SHA-256 checksum." \
+            "${options[@]}"
+          # Discovery skips drafts: expose this release only after all assets
+          # have uploaded successfully. Do not displace other products' latest.
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
