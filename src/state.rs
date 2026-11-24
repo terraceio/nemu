@@ -129,15 +129,39 @@ impl Project {
             "no flake at {}; run `nemu init`",
             self.flake.display()
         );
-        let path = self
-            .flake
-            .to_str()
-            .context("Nix flake path must be UTF-8")?;
+        Ok(format!(
+            "{}#nemu.{}.{attribute}",
+            self.source()?,
+            config::host()?
+        ))
+    }
+
+    pub fn source(&self) -> Result<String> {
+        let path = utf8(&self.flake)?;
+        let Some(top) = git_toplevel(&self.flake)? else {
+            return Ok(format!("path:{path}"));
+        };
+        let tracked = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.flake)
+            .args(["ls-files", "--error-unmatch", "flake.nix", "flake.lock"])
+            .output()
+            .context("run git ls-files")?;
         ensure!(
-            !path.contains(['#', '?']),
-            "Nix flake path cannot contain # or ?"
+            tracked.status.success(),
+            "{} is in a git repository, so Nix reads it from git: `git add` its flake.nix, flake.lock and the files they use",
+            self.flake.display()
         );
-        Ok(format!("path:{path}#nemu.{}.{attribute}", config::host()?))
+        let relative = self
+            .flake
+            .strip_prefix(&top)
+            .context("flake is outside its git repository")?;
+        let top = utf8(&top)?;
+        Ok(if relative.as_os_str().is_empty() {
+            format!("git+file:{top}")
+        } else {
+            format!("git+file:{top}?dir={}", utf8(relative)?)
+        })
     }
 
     pub fn disk(&self) -> PathBuf {
@@ -150,6 +174,33 @@ impl Project {
     pub fn pid_alive(&self) -> Result<bool> {
         pid_alive(&self.state.join("qemu.pid"))
     }
+}
+
+fn utf8(path: &Path) -> Result<&str> {
+    let path = path.to_str().context("Nix flake path must be UTF-8")?;
+    ensure!(
+        !path.contains(['#', '?', '&']),
+        "Nix flake path cannot contain #, ? or &"
+    );
+    Ok(path)
+}
+
+fn git_toplevel(directory: &Path) -> Result<Option<PathBuf>> {
+    let Ok(output) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+    else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let top = String::from_utf8(output.stdout).context("git repository path must be UTF-8")?;
+    Ok(Some(
+        fs::canonicalize(top.trim_end()).context("resolve git repository path")?,
+    ))
 }
 
 pub fn lock(directory: &Path) -> Result<File> {

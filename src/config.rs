@@ -131,8 +131,7 @@ impl Config {
 pub async fn load(project: &Project) -> Result<Config> {
     ensure!(
         project.flake.join("flake.lock").is_file(),
-        "missing {}/flake.lock; run `nemu init` or `nix flake lock path:{}` first",
-        project.flake.display(),
+        "missing {}/flake.lock; run `nemu init`, or `nix flake lock` in that directory, first",
         project.flake.display()
     );
     let mut command = process::nix();
